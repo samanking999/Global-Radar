@@ -3,254 +3,275 @@ import feedparser
 import google.generativeai as genai
 from groq import Groq
 import json
-import time 
+import sqlite3
 from datetime import datetime
-import re # Thư viện bóc tách dữ liệu chống lỗi JSON
+import re
 
 # ==========================================
-# 1. CẤU HÌNH GIAO DIỆN & CSS
+# 1. CẤU HÌNH GIAO DIỆN & DATABASE
 # ==========================================
-st.set_page_config(page_title="Radar Chiến Lược Toàn Cầu v9.2", layout="wide", page_icon="📡")
+st.set_page_config(page_title="Radar Chiến Lược Toàn Cầu v12.1", layout="wide", page_icon="📡")
 
+# !!! QUAN TRỌNG: SỬA EMAIL NÀY THÀNH EMAIL CỦA BẠN !!!
+MASTER_ADMIN_EMAIL = "admin@gmail.com"
+
+def init_db():
+    conn = sqlite3.connect('radar_database.db')
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS api_keys (id INTEGER PRIMARY KEY, platform TEXT, key_value TEXT UNIQUE)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS reports (id INTEGER PRIMARY KEY AUTOINCREMENT, run_time TEXT, html_content TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, email TEXT UNIQUE, role TEXT)''')
+    
+    # Khởi tạo Master Admin mặc định
+    c.execute("SELECT COUNT(*) FROM users WHERE role='admin'")
+    if c.fetchone()[0] == 0:
+        c.execute("INSERT OR IGNORE INTO users (email, role) VALUES (?, 'admin')", (MASTER_ADMIN_EMAIL,))
+    conn.commit()
+    conn.close()
+
+init_db()
+
+# --- Các hàm xử lý Database ---
+def add_user(email, role="user"):
+    try:
+        conn = sqlite3.connect('radar_database.db'); c = conn.cursor()
+        c.execute("INSERT INTO users (email, role) VALUES (?, ?)", (email.strip(), role))
+        conn.commit(); conn.close(); return True
+    except sqlite3.IntegrityError: return False
+
+def get_all_users():
+    conn = sqlite3.connect('radar_database.db'); c = conn.cursor()
+    c.execute("SELECT email, role FROM users ORDER BY role, email")
+    users = c.fetchall(); conn.close(); return users
+
+def check_user_access(email):
+    conn = sqlite3.connect('radar_database.db'); c = conn.cursor()
+    c.execute("SELECT role FROM users WHERE email=?", (email.strip(),))
+    result = c.fetchone(); conn.close()
+    return result[0] if result else None
+
+def add_api_key(platform, key_value):
+    conn = sqlite3.connect('radar_database.db'); c = conn.cursor()
+    # Xóa key cũ của platform này trước khi lưu key mới (Để đảm bảo chỉ có 1 key đang active)
+    c.execute("DELETE FROM api_keys WHERE platform=?", (platform,))
+    c.execute("INSERT INTO api_keys (platform, key_value) VALUES (?, ?)", (platform, key_value.strip()))
+    conn.commit(); conn.close()
+
+def get_api_key(platform):
+    conn = sqlite3.connect('radar_database.db'); c = conn.cursor()
+    c.execute("SELECT key_value FROM api_keys WHERE platform=? ORDER BY id DESC LIMIT 1", (platform,))
+    res = c.fetchone(); conn.close()
+    return res[0] if res else None
+
+def reset_all_api_keys():
+    conn = sqlite3.connect('radar_database.db'); c = conn.cursor()
+    c.execute("DELETE FROM api_keys")
+    conn.commit(); conn.close()
+
+def save_report_to_db(html_content):
+    conn = sqlite3.connect('radar_database.db'); c = conn.cursor()
+    run_time = datetime.now().strftime("%H:%M - %d/%m/%Y")
+    c.execute("INSERT INTO reports (run_time, html_content) VALUES (?, ?)", (run_time, html_content))
+    conn.commit()
+    c.execute("SELECT id FROM reports ORDER BY id DESC OFFSET 20")
+    for row in c.fetchall(): c.execute("DELETE FROM reports WHERE id=?", (row[0],))
+    conn.commit(); conn.close()
+
+def get_report_history():
+    conn = sqlite3.connect('radar_database.db'); c = conn.cursor()
+    c.execute("SELECT id, run_time, html_content FROM reports ORDER BY id DESC")
+    records = c.fetchall(); conn.close(); return records
+
+# CSS
 st.markdown("""
 <style>
-    .news-card { background-color: #ffffff; padding: 18px; border-radius: 10px; margin-bottom: 15px; border-left: 5px solid #0056b3; box-shadow: 0 4px 6px rgba(0,0,0,0.05); border: 1px solid #eee; }
-    .news-header { display: flex; justify-content: space-between; margin-bottom: 10px; }
-    .news-category { font-size: 10px; font-weight: bold; background-color: #212529; color: white; padding: 2px 8px; border-radius: 3px; text-transform: uppercase; }
-    .news-title-link { font-size: 17px; font-weight: 800; color: #0056b3; text-decoration: none; line-height: 1.3; display: block; margin-bottom: 8px; }
-    .news-title-link:hover { color: #d9534f; text-decoration: underline; }
-    .news-brief { font-size: 14px; color: #333; line-height: 1.6; margin-bottom: 12px; }
-    .news-insight { font-size: 13px; font-style: italic; color: #155724; background-color: #d4edda; padding: 10px; border-radius: 5px; border-left: 3px solid #28a745; }
-    .market-outlook { background-color: #111; color: #00ff41; padding: 20px; border-radius: 8px; font-family: 'Courier New', Courier, monospace; font-size: 14px; border: 1px solid #00ff41; margin-bottom: 20px;}
-    .chat-container { margin-top: 40px; padding-top: 20px; border-top: 2px solid #eee; }
+    .news-card { background: #fff; padding: 18px; border-radius: 10px; margin-bottom: 15px; border-left: 5px solid #0056b3; box-shadow: 0 4px 6px rgba(0,0,0,0.05); border: 1px solid #eee; }
+    .news-category { font-size: 10px; font-weight: bold; background: #212529; color: white; padding: 2px 8px; border-radius: 3px; }
+    .news-title-link { font-size: 17px; font-weight: bold; color: #0056b3; text-decoration: none; display: block; margin-bottom: 8px; margin-top: 8px; }
+    .news-insight { font-size: 13px; font-style: italic; color: #155724; background: #d4edda; padding: 10px; border-radius: 5px; }
+    .market-outlook { background: #111; color: #00ff41; padding: 20px; border-radius: 8px; font-family: monospace; }
 </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. KHỞI TẠO BỘ NHỚ (SESSION STATE)
+# 2. HỆ THỐNG ĐĂNG NHẬP
 # ==========================================
-if "news_store" not in st.session_state: st.session_state.news_store = {}
-if "outlook_store" not in st.session_state: st.session_state.outlook_store = ""
-if "chat_history" not in st.session_state: st.session_state.chat_history = []
+if 'logged_in' not in st.session_state: st.session_state.logged_in = False
+if 'user_email' not in st.session_state: st.session_state.user_email = ""
+if 'is_admin' not in st.session_state: st.session_state.is_admin = False
+
+def login_screen():
+    st.title("🔐 Cổng Đăng Nhập Radar")
+    with st.form("login_form"):
+        email = st.text_input("Nhập Gmail của bạn:")
+        submit = st.form_submit_button("Đăng nhập")
+        if submit:
+            user_role = check_user_access(email)
+            if user_role:
+                st.session_state.logged_in = True
+                st.session_state.user_email = email
+                st.session_state.is_admin = (user_role == "admin")
+                st.rerun()
+            else:
+                st.error("Tài khoản chưa được cấp quyền. Vui lòng liên hệ Admin.")
+    st.stop()
+
+if not st.session_state.logged_in: login_screen()
+
+st.sidebar.success(f"👤 {st.session_state.user_email}")
+if st.sidebar.button("Đăng xuất", size="small"):
+    st.session_state.logged_in = False; st.rerun()
+
+# Lấy API Key từ Database
+current_groq_key = get_api_key("GROQ")
+current_gemini_key = get_api_key("GEMINI")
 
 # ==========================================
-# 3. NGUỒN TIN TỨC & BỘ LỌC
+# 3. MENU ADMIN (QUẢN LÝ THÔNG MINH)
+# ==========================================
+if st.session_state.is_admin:
+    st.sidebar.markdown("---")
+    st.sidebar.header("👑 Khu vực Admin")
+    
+    # Quản lý Người dùng
+    with st.sidebar.expander("👥 Quản lý Truy cập"):
+        new_email = st.text_input("Mời người mới (Email):")
+        new_role = st.selectbox("Cấp quyền:", ["user", "admin"])
+        if st.button("Thêm User"):
+            if add_user(new_email, new_role): st.success("Đã thêm!"); st.rerun()
+            else: st.warning("Email đã tồn tại.")
+        st.write("📋 **Danh sách:**")
+        for u_email, u_role in get_all_users(): st.caption(f"- {u_email} ({u_role})")
+    
+    # Quản lý API Key (THÔNG MINH)
+    with st.sidebar.expander("🔑 Quản lý API Keys", expanded=(not current_groq_key or not current_gemini_key)):
+        if current_groq_key and current_gemini_key:
+            st.success("✅ Cả 2 API đã được kết nối và lưu trữ an toàn trong hệ thống.")
+            st.caption(f"Groq: ...{current_groq_key[-4:]} | Gemini: ...{current_gemini_key[-4:]}")
+            if st.button("🔄 Thay đổi API Keys", type="secondary"):
+                reset_all_api_keys()
+                st.rerun()
+        else:
+            st.warning("⚠️ Hệ thống chưa có API Key. Vui lòng nhập để sử dụng.")
+            new_groq = st.text_input("Nhập Groq API Key:", type="password")
+            new_gemini = st.text_input("Nhập Gemini API Key:", type="password")
+            if st.button("Lưu API Keys", type="primary"):
+                if new_groq and new_gemini:
+                    add_api_key("GROQ", new_groq)
+                    add_api_key("GEMINI", new_gemini)
+                    st.rerun()
+                else:
+                    st.error("Vui lòng nhập đủ cả 2 Key!")
+
+st.sidebar.markdown("---")
+st.sidebar.header("🗂️ Lịch sử Báo cáo")
+history_records = get_report_history()
+if not history_records: st.sidebar.caption("Chưa có dữ liệu.")
+else:
+    for rep_id, rep_time, html_data in history_records:
+        with st.sidebar.expander(f"🕒 {rep_time}"):
+            st.download_button("📥 Tải File HTML", data=html_data, file_name=f"Radar_{rep_id}.html", mime="text/html", key=f"dl_{rep_id}", use_container_width=True)
+
+# ==========================================
+# 4. HÀM XỬ LÝ LÕI
 # ==========================================
 RSS_FEEDS = {
-    "Mỹ 🇺🇸": ["https://rss.nytimes.com/services/xml/rss/nyt/World.xml", "http://rss.cnn.com/rss/edition_world.rss"],
-    "Châu Âu 🇪🇺": ["http://feeds.bbci.co.uk/news/world/europe/rss.xml", "https://www.france24.com/en/europe/rss"],
-    "Nga 🇷🇺": ["https://www.themoscowtimes.com/rss/news", "https://tass.com/rss/v2.xml"],
-    "Trung Quốc 🇨🇳": ["https://www.scmp.com/rss/318198/feed", "http://www.xinhuanet.com/english/rss/worldrss.xml"],
-    "Việt Nam 🇻🇳": ["https://vnexpress.net/rss/the-gioi.rss", "https://tuoitre.vn/rss/the-gioi.rss"]
+    "Mỹ 🇺🇸": ["https://rss.nytimes.com/services/xml/rss/nyt/World.xml"],
+    "Châu Âu 🇪🇺": ["http://feeds.bbci.co.uk/news/world/europe/rss.xml"],
+    "Trung Quốc 🇨🇳": ["https://www.scmp.com/rss/318198/feed"],
+    "Việt Nam 🇻🇳": ["https://vnexpress.net/rss/the-gioi.rss"]
 }
-CATEGORIES = ["Kinh tế", "Chính trị", "Ngân hàng", "Công nghệ & AI", "Quân sự", "Năng lượng"]
+CATEGORIES = ["Kinh tế", "Chính trị", "Ngân hàng", "Công nghệ & AI"]
+SAFE_SETTINGS = [{"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}, {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"}, {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"}, {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"}]
 
-SAFE_SETTINGS = [
-    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
-]
-
-# ==========================================
-# 4. HÀM XỬ LÝ DỮ LIỆU & KIẾN TRÚC LAI
-# ==========================================
-def fetch_latest_news(urls, max_items_per_url=20):
-    results = []
-    for url in urls:
+def fetch_latest_news(urls):
+    res = []
+    for u in urls:
         try:
-            feed = feedparser.parse(url)
-            for entry in feed.entries[:max_items_per_url]:
-                results.append({"raw_title": entry.get('title', ''), "link": entry.get('link', '#'), "summary": entry.get('summary', '')[:200]})
-        except: continue
-    return results
+            for entry in feedparser.parse(u).entries[:20]: res.append({"raw_title": entry.get('title',''), "link": entry.get('link','#'), "summary": entry.get('summary','')[:200]})
+        except: pass
+    return res
 
-def groq_analyze_worker(groq_key, raw_data, region, topic_list, top_n):
-    """CÔNG NHÂN: Dùng Groq (Llama 3.3) tóm tắt & Kẹp Regex gắp JSON chống lỗi"""
-    client = Groq(api_key=groq_key)
-    prompt = f"""
-    Khu vực: {region}.
-    Từ danh sách tin mới nhất:
-    1. Lọc ra ĐÚNG {top_n} tin quan trọng nhất thuộc: {", ".join(topic_list)}.
-    2. Tóm tắt 2-3 DÒNG cho mỗi tin.
-    3. BẮT BUỘC trả về ĐÚNG 1 mảng JSON, không giải thích.
-    Cấu trúc chuẩn:
-    [
-      {{"cat": "Lĩnh vực", "src": "Tên báo", "tit": "Tiêu đề tiếng Việt", "lnk": "Link gốc", "brf": "Tóm tắt 2-3 dòng", "ins": "Nhận định 1 câu"}}
-    ]
-    Dữ liệu thô: {json.dumps(raw_data)}
-    """
+def groq_analyze(api_key, raw_data, region, topics, top_n):
+    client = Groq(api_key=api_key)
+    prompt = f"Lọc {top_n} tin ở {region} về {','.join(topics)}. Tóm tắt 2 dòng. Trả về JSON: {{'data': [{{'cat':'','src':'','tit':'','lnk':'','brf':'','ins':''}}]}}. Data: {json.dumps(raw_data)}"
     try:
-        response = client.chat.completions.create(
-            messages=[
-                {"role": "system", "content": "You are a data API. Output ONLY a valid JSON array. Do not include markdown formatting. Do not add conversational text."},
-                {"role": "user", "content": prompt}
-            ],
-            model="llama-3.3-70b-versatile",
-            temperature=0.1 # Hạ nhiệt độ để AI trả lời nguyên tắc hơn
-        )
-        
-        raw_text = response.choices[0].message.content.strip()
-        
-        # BỘ LỌC REGEX: TÌM VÀ GẮP CHÍNH XÁC MẢNG JSON
-        match = re.search(r'\[.*\]', raw_text, re.DOTALL)
-        if match:
-            clean_json = match.group(0)
-        else:
-            clean_json = raw_text
-            
-        return json.loads(clean_json)
-        
-    except Exception as e: 
-        error_msg = raw_text if 'raw_text' in locals() else "Không phản hồi"
-        return [{"cat": "Lỗi", "src": "Hệ thống", "tit": f"Lỗi định dạng ở {region}", "lnk": "#", "brf": f"AI nhả sai cấu trúc. Text gốc: {error_msg[:80]}...", "ins": str(e)}]
+        response = client.chat.completions.create(messages=[{"role": "system", "content": "You are a JSON API. Output strictly a JSON object."}, {"role": "user", "content": prompt}], model="llama-3.3-70b-versatile", temperature=0.1, response_format={"type": "json_object"})
+        return json.loads(response.choices[0].message.content).get("data", [])
+    except Exception as e: return [{"cat": "Lỗi", "tit": "Lỗi lấy tin", "brf": str(e)}]
 
 def generate_html_report(news_data, outlook):
-    """XUẤT FILE: Tạo báo cáo HTML độc lập"""
     now_str = datetime.now().strftime("%H:%M - %d/%m/%Y")
-    html = f"""
-    <html><head><meta charset="utf-8"><title>Radar Chiến Lược - {now_str}</title>
-    <style>
-        body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 1000px; margin: 0 auto; padding: 20px; background: #f4f7f6; }}
-        h1 {{ color: #0056b3; border-bottom: 2px solid #0056b3; padding-bottom: 10px; }}
-        .macro {{ background: #111; color: #00ff41; padding: 20px; border-radius: 8px; font-family: monospace; margin-bottom: 30px; line-height: 1.6; }}
-        .region-title {{ color: #d9534f; border-bottom: 1px solid #ccc; margin-top: 30px; }}
-        .card {{ background: #fff; padding: 15px; border-radius: 8px; margin-bottom: 15px; border-left: 4px solid #0056b3; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
-        .cat {{ background: #343a40; color: #fff; padding: 3px 8px; font-size: 11px; border-radius: 3px; }}
-        .title {{ font-size: 16px; font-weight: bold; margin: 10px 0; }}
-        .title a {{ color: #0056b3; text-decoration: none; }}
-        .insight {{ background: #e2eafc; padding: 8px; border-left: 3px solid #0056b3; font-style: italic; font-size: 13px; margin-top: 10px; }}
-    </style></head><body>
-    <h1>🌍 Báo Cáo Radar Chiến Lược Toàn Cầu</h1>
-    <p><i>Cập nhật lúc: {now_str}</i></p>
-    <h2>👁️ Nhận Định Vĩ Mô</h2>
-    <div class="macro">{outlook.replace(chr(10), '<br>')}</div>
-    """
+    html = f"<html><head><meta charset='utf-8'><title>Radar - {now_str}</title><style>body{{font-family:Arial;max-width:1000px;margin:auto;padding:20px}} h1{{color:#0056b3}} .card{{background:#f9f9f9;padding:15px;margin-bottom:15px;border-left:4px solid #0056b3}}</style></head><body>"
+    html += f"<h1>🌍 Báo Cáo Radar ({now_str})</h1><h2>👁️ Vĩ Mô</h2><div style='background:#111;color:#0f0;padding:15px'>{outlook.replace(chr(10), '<br>')}</div>"
     for region, items in news_data.items():
-        html += f"<h2 class='region-title'>📍 {region}</h2>"
+        html += f"<h2 style='color:#d9534f;margin-top:30px'>📍 {region}</h2>"
         for item in items:
-            html += f"""
-            <div class="card">
-                <div><span class="cat">{item.get('cat', 'Chung')}</span> | <b>{item.get('src', 'Nguồn')}</b></div>
-                <div class="title"><a href="{item.get('lnk', '#')}" target="_blank">{item.get('tit', 'Tiêu đề')}</a></div>
-                <div style="font-size:14px;">{item.get('brf', '')}</div>
-                <div class="insight">💡 Phân tích: {item.get('ins', '')}</div>
-            </div>"""
-    html += "</body></html>"
-    return html
+            if isinstance(item, dict):
+                html += f"<div class='card'><b>[{item.get('cat','')}] {item.get('src','')}</b><br><a href='{item.get('lnk','#')}'><b>{item.get('tit','')}</b></a><p>{item.get('brf','')}</p><i>💡 {item.get('ins','')}</i></div>"
+    return html + "</body></html>"
 
 # ==========================================
-# 5. GIAO DIỆN CÀI ĐẶT (SIDEBAR)
+# 5. ĐIỀU KHIỂN RADAR
 # ==========================================
-with st.sidebar:
-    st.header("⚙️ Cài đặt Kiến trúc Lai")
-    st.caption("Mở bảng này để nhập API Key")
-    groq_key = st.text_input("1. Groq API Key (Quét tin):", type="password")
-    gemini_key = st.text_input("2. Gemini API Key (Bộ não vĩ mô/Chat):", type="password")
-    
-    st.divider()
-    selected_regions = st.multiselect("Vùng theo dõi:", list(RSS_FEEDS.keys()), default=list(RSS_FEEDS.keys())[:3])
-    selected_topics = st.multiselect("Lĩnh vực trọng tâm:", CATEGORIES, default=["Kinh tế", "Chính trị", "Công nghệ & AI"])
-    top_n_option = st.radio("Số tin hiển thị mỗi vùng:", [5, 10, 20], horizontal=True, index=0)
-    
-    run_btn = st.button("🚀 CẬP NHẬT (HYBRID MODE)", type="primary", use_container_width=True)
+st.title("🌍 Radar Chiến Lược Toàn Cầu")
 
-# ==========================================
-# 6. HIỂN THỊ CHÍNH & LUỒNG CHẠY
-# ==========================================
-st.title("🌍 Radar Chiến Lược Toàn Cầu (Hybrid)")
+st.sidebar.markdown("---")
+st.sidebar.header("⚙️ Chạy Radar")
+selected_regions = st.sidebar.multiselect("Vùng:", list(RSS_FEEDS.keys()), default=list(RSS_FEEDS.keys())[:2])
+selected_topics = st.sidebar.multiselect("Lĩnh vực:", CATEGORIES, default=["Kinh tế", "Chính trị"])
+top_n_option = st.sidebar.radio("Số tin mỗi vùng:", [5, 10], horizontal=True)
 
-if run_btn:
-    if not groq_key or not gemini_key: st.error("Vui lòng nhập ĐỦ CẢ 2 API Key ở menu bên trái!")
-    elif not selected_regions or not selected_topics: st.warning("Chọn ít nhất 1 vùng và 1 lĩnh vực!")
+if st.sidebar.button("🚀 CẬP NHẬT DỮ LIỆU MỚI", type="primary", use_container_width=True):
+    if not current_groq_key or not current_gemini_key: 
+        st.error("Hệ thống chưa có API Key! Vui lòng nhờ Admin nhập ở thanh bên trái.")
+    elif not selected_regions or not selected_topics: 
+        st.warning("Chọn ít nhất 1 vùng và 1 lĩnh vực!")
     else:
-        with st.spinner("🔄 Llama 3.3 (Groq) đang quét và tóm tắt tin tức tốc độ cao..."):
-            st.session_state.news_store = {}
-            st.session_state.raw_news_store = {}
-            st.session_state.chat_history = [] 
+        with st.spinner("🔄 Hệ thống Lai đang vận hành..."):
+            st.session_state.news_store = {}; st.session_state.chat_history = []
             
-            # GIAI ĐOẠN 1: GROQ LÀM CÔNG NHÂN TÓM TẮT
             for region in selected_regions:
-                raw_list = fetch_latest_news(RSS_FEEDS[region], max_items_per_url=20)
-                if raw_list:
-                    st.session_state.raw_news_store[region] = raw_list
-                    st.session_state.news_store[region] = groq_analyze_worker(groq_key, raw_list, region, selected_topics, top_n_option)
+                raw = fetch_latest_news(RSS_FEEDS[region])
+                if raw: st.session_state.news_store[region] = groq_analyze(current_groq_key, raw, region, selected_topics, top_n_option)
             
-        with st.spinner("🧠 Gemini đang đọc dữ liệu để đúc kết vĩ mô..."):
-            # GIAI ĐOẠN 2: GEMINI LÀM BỘ NÃO VĨ MÔ
-            genai.configure(api_key=gemini_key)
-            model_macro = genai.GenerativeModel('gemini-2.5-flash')
             try:
-                st.session_state.outlook_store = model_macro.generate_content(
-                    f"Tổng hợp nhận định vĩ mô thế giới dựa trên các tin tức sau: {json.dumps(st.session_state.news_store)}",
-                    safety_settings=SAFE_SETTINGS
-                ).text
-            except Exception as e:
-                st.session_state.outlook_store = f"⚠️ Lỗi Gemini: {str(e)}"
+                genai.configure(api_key=current_gemini_key)
+                st.session_state.outlook_store = genai.GenerativeModel('gemini-2.5-flash').generate_content(f"Nhận định vĩ mô từ tin tức sau: {json.dumps(st.session_state.news_store)}", safety_settings=SAFE_SETTINGS).text
+            except Exception as e: st.session_state.outlook_store = f"Lỗi Gemini: {e}"
+            
+            save_report_to_db(generate_html_report(st.session_state.news_store, st.session_state.outlook_store))
+            st.toast("✅ Đã lưu báo cáo vào lịch sử!", icon="💾")
 
-# ==========================================
-# 7. RENDER KẾT QUẢ & NÚT XUẤT HTML
-# ==========================================
-if st.session_state.news_store:
-    # --- TÍNH NĂNG XUẤT FILE HTML ---
-    html_content = generate_html_report(st.session_state.news_store, st.session_state.outlook_store)
-    st.download_button(
-        label="📥 TẢI BÁO CÁO HTML (ĐỌC OFFLINE)",
-        data=html_content,
-        file_name=f"Radar_Chien_Luoc_{datetime.now().strftime('%Y%m%d_%H%M')}.html",
-        mime="text/html",
-        type="secondary",
-        use_container_width=True
-    )
-    st.markdown("<br>", unsafe_allow_html=True)
-    
-    # Render các Tab Tin tức
-    tab_list = st.tabs(list(st.session_state.news_store.keys()))
+if "news_store" in st.session_state and st.session_state.news_store:
+    tabs = st.tabs(list(st.session_state.news_store.keys()))
     for i, region in enumerate(st.session_state.news_store.keys()):
-        with tab_list[i]:
+        with tabs[i]:
             for item in st.session_state.news_store[region]:
-                st.markdown(f"""
-                <div class="news-card">
-                    <div class="news-header">
-                        <span class="news-category">{item.get('cat', 'Chung')}</span>
-                        <b>{item.get('src', 'Nguồn')}</b>
-                    </div>
-                    <a href="{item.get('lnk', '#')}" target="_blank" class="news-title-link">{item.get('tit', 'Tiêu đề')} 🔗</a>
-                    <div class="news-brief">{item.get('brf', '')}</div>
-                    <div class="news-insight">💡 <b>Phân tích:</b> {item.get('ins', '')}</div>
-                </div>
-                """, unsafe_allow_html=True)
-                
-            st.markdown("---")
-            with st.expander(f"📂 Xem toàn bộ dữ liệu gốc ({len(st.session_state.raw_news_store.get(region, []))} tin đã kéo về)"):
-                for idx, raw_item in enumerate(st.session_state.raw_news_store.get(region, [])):
-                    st.markdown(f"<div class='raw-news-item'>{idx + 1}. <a href='{raw_item['link']}' target='_blank'>{raw_item['raw_title']}</a></div>", unsafe_allow_html=True)
+                if isinstance(item, dict):
+                    st.markdown(f"""
+                    <div class="news-card">
+                        <span class="news-category">{item.get('cat', 'Chung')}</span> <b>{item.get('src', 'Nguồn')}</b>
+                        <a href="{item.get('lnk', '#')}" target="_blank" class="news-title-link">{item.get('tit', 'Tiêu đề')} 🔗</a>
+                        <div class="news-brief">{item.get('brf', '')}</div>
+                        <div class="news-insight">💡 <b>Phân tích:</b> {item.get('ins', '')}</div>
+                    </div>""", unsafe_allow_html=True)
     
-    # Render Nhận định Vĩ mô
-    st.markdown("### 📡 NHẬN ĐỊNH VĨ MÔ (By Gemini 2.5 Flash)")
+    st.markdown("### 📡 NHẬN ĐỊNH VĨ MÔ")
     st.markdown(f'<div class="market-outlook">{st.session_state.outlook_store}</div>', unsafe_allow_html=True)
 
-    # Render Chat Assistant
-    st.markdown('<div class="chat-container">', unsafe_allow_html=True)
+    st.markdown("---")
     st.subheader("💬 Trợ lý Gemini Chuyên Sâu")
-    
     for msg in st.session_state.chat_history:
         with st.chat_message(msg["role"]): st.write(msg["content"])
         
-    if chat_input := st.chat_input("VD: Tóm tắt cho tôi xu hướng công nghệ lõi hôm nay?"):
+    if chat_input := st.chat_input("Hỏi trợ lý về dữ liệu vừa quét..."):
         st.session_state.chat_history.append({"role": "user", "content": chat_input})
         with st.chat_message("user"): st.write(chat_input)
-        
         with st.chat_message("assistant"):
             try:
-                genai.configure(api_key=gemini_key) 
-                chat_model = genai.GenerativeModel('gemini-2.5-flash')
-                res = chat_model.generate_content(
-                    f"Dữ liệu hôm nay: {json.dumps(st.session_state.news_store)}\nTrả lời: {chat_input}", 
-                    safety_settings=SAFE_SETTINGS
-                )
+                genai.configure(api_key=current_gemini_key)
+                res = genai.GenerativeModel('gemini-2.5-flash').generate_content(f"Dữ liệu: {json.dumps(st.session_state.news_store)}\nHỏi: {chat_input}", safety_settings=SAFE_SETTINGS)
                 st.write(res.text)
                 st.session_state.chat_history.append({"role": "assistant", "content": res.text})
-            except Exception as e:
-                st.error(f"Lỗi kết nối Gemini: {e}")
-    st.markdown('</div>', unsafe_allow_html=True)
+            except Exception as e: st.error(f"Lỗi: {e}")

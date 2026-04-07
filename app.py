@@ -10,9 +10,9 @@ import re
 # ==========================================
 # 1. CẤU HÌNH GIAO DIỆN & DATABASE
 # ==========================================
-st.set_page_config(page_title="Radar Chiến Lược Toàn Cầu v12.2", layout="wide", page_icon="📡")
+st.set_page_config(page_title="Radar Chiến Lược Toàn Cầu v12.3", layout="wide", page_icon="📡")
 
-# !!! QUAN TRỌNG: SỬA EMAIL NÀY THÀNH EMAIL CỦA BẠN !!!
+# !!! QUAN TRỌNG: SỬA EMAIL NÀY THÀNH EMAIL CỦA BẠN TRƯỚC KHI CHẠY !!!
 MASTER_ADMIN_EMAIL = "admin@gmail.com"
 
 def init_db():
@@ -22,7 +22,7 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS reports (id INTEGER PRIMARY KEY AUTOINCREMENT, run_time TEXT, html_content TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, email TEXT UNIQUE, role TEXT)''')
     
-    # Khởi tạo Master Admin mặc định
+    # Khởi tạo Master Admin mặc định nếu database trống
     c.execute("SELECT COUNT(*) FROM users WHERE role='admin'")
     if c.fetchone()[0] == 0:
         c.execute("INSERT OR IGNORE INTO users (email, role) VALUES (?, 'admin')", (MASTER_ADMIN_EMAIL,))
@@ -72,8 +72,10 @@ def save_report_to_db(html_content):
     run_time = datetime.now().strftime("%H:%M - %d/%m/%Y")
     c.execute("INSERT INTO reports (run_time, html_content) VALUES (?, ?)", (run_time, html_content))
     conn.commit()
-    c.execute("SELECT id FROM reports ORDER BY id DESC OFFSET 20")
-    for row in c.fetchall(): c.execute("DELETE FROM reports WHERE id=?", (row[0],))
+    # ĐÃ VÁ LỖI SQLITE: Thêm LIMIT -1 để đi kèm với OFFSET
+    c.execute("SELECT id FROM reports ORDER BY id DESC LIMIT -1 OFFSET 20")
+    for row in c.fetchall(): 
+        c.execute("DELETE FROM reports WHERE id=?", (row[0],))
     conn.commit(); conn.close()
 
 def get_report_history():
@@ -119,7 +121,6 @@ if not st.session_state.logged_in: login_screen()
 
 st.sidebar.success(f"👤 {st.session_state.user_email}")
 
-# ĐÃ SỬA LỖI SIZE="SMALL" Ở ĐÂY
 if st.sidebar.button("Đăng xuất"):
     st.session_state.logged_in = False; st.rerun()
 
@@ -186,7 +187,6 @@ def fetch_latest_news(urls):
     res = []
     for u in urls:
         try:
-            # ĐÃ GIẢM TẢI: Chỉ lấy 10 tin mới nhất để tiết kiệm Token Groq
             for entry in feedparser.parse(u).entries[:10]: 
                 res.append({"raw_title": entry.get('title',''), "link": entry.get('link','#'), "summary": entry.get('summary','')[:200]})
         except: pass
@@ -198,7 +198,7 @@ def groq_analyze(api_key, raw_data, region, topics, top_n):
     try:
         response = client.chat.completions.create(
             messages=[{"role": "system", "content": "You are a JSON API. Output strictly a JSON object."}, {"role": "user", "content": prompt}], 
-            model="llama-3.1-8b-instant", # ĐÃ ĐỔI SANG ĐỘNG CƠ TIẾT KIỆM (8B)
+            model="llama-3.1-8b-instant", 
             temperature=0.1, 
             response_format={"type": "json_object"}
         )

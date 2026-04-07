@@ -10,7 +10,7 @@ import re
 # ==========================================
 # 1. CẤU HÌNH GIAO DIỆN & DATABASE
 # ==========================================
-st.set_page_config(page_title="Radar Chiến Lược Toàn Cầu v12.1", layout="wide", page_icon="📡")
+st.set_page_config(page_title="Radar Chiến Lược Toàn Cầu v12.2", layout="wide", page_icon="📡")
 
 # !!! QUAN TRỌNG: SỬA EMAIL NÀY THÀNH EMAIL CỦA BẠN !!!
 MASTER_ADMIN_EMAIL = "admin@gmail.com"
@@ -52,7 +52,6 @@ def check_user_access(email):
 
 def add_api_key(platform, key_value):
     conn = sqlite3.connect('radar_database.db'); c = conn.cursor()
-    # Xóa key cũ của platform này trước khi lưu key mới (Để đảm bảo chỉ có 1 key đang active)
     c.execute("DELETE FROM api_keys WHERE platform=?", (platform,))
     c.execute("INSERT INTO api_keys (platform, key_value) VALUES (?, ?)", (platform, key_value.strip()))
     conn.commit(); conn.close()
@@ -119,21 +118,21 @@ def login_screen():
 if not st.session_state.logged_in: login_screen()
 
 st.sidebar.success(f"👤 {st.session_state.user_email}")
-if st.sidebar.button("Đăng xuất", size="small"):
+
+# ĐÃ SỬA LỖI SIZE="SMALL" Ở ĐÂY
+if st.sidebar.button("Đăng xuất"):
     st.session_state.logged_in = False; st.rerun()
 
-# Lấy API Key từ Database
 current_groq_key = get_api_key("GROQ")
 current_gemini_key = get_api_key("GEMINI")
 
 # ==========================================
-# 3. MENU ADMIN (QUẢN LÝ THÔNG MINH)
+# 3. MENU ADMIN
 # ==========================================
 if st.session_state.is_admin:
     st.sidebar.markdown("---")
     st.sidebar.header("👑 Khu vực Admin")
     
-    # Quản lý Người dùng
     with st.sidebar.expander("👥 Quản lý Truy cập"):
         new_email = st.text_input("Mời người mới (Email):")
         new_role = st.selectbox("Cấp quyền:", ["user", "admin"])
@@ -143,16 +142,15 @@ if st.session_state.is_admin:
         st.write("📋 **Danh sách:**")
         for u_email, u_role in get_all_users(): st.caption(f"- {u_email} ({u_role})")
     
-    # Quản lý API Key (THÔNG MINH)
     with st.sidebar.expander("🔑 Quản lý API Keys", expanded=(not current_groq_key or not current_gemini_key)):
         if current_groq_key and current_gemini_key:
-            st.success("✅ Cả 2 API đã được kết nối và lưu trữ an toàn trong hệ thống.")
+            st.success("✅ Đã kết nối API an toàn.")
             st.caption(f"Groq: ...{current_groq_key[-4:]} | Gemini: ...{current_gemini_key[-4:]}")
             if st.button("🔄 Thay đổi API Keys", type="secondary"):
                 reset_all_api_keys()
                 st.rerun()
         else:
-            st.warning("⚠️ Hệ thống chưa có API Key. Vui lòng nhập để sử dụng.")
+            st.warning("⚠️ Hệ thống chưa có API Key.")
             new_groq = st.text_input("Nhập Groq API Key:", type="password")
             new_gemini = st.text_input("Nhập Gemini API Key:", type="password")
             if st.button("Lưu API Keys", type="primary"):
@@ -161,7 +159,7 @@ if st.session_state.is_admin:
                     add_api_key("GEMINI", new_gemini)
                     st.rerun()
                 else:
-                    st.error("Vui lòng nhập đủ cả 2 Key!")
+                    st.error("Nhập đủ cả 2 Key!")
 
 st.sidebar.markdown("---")
 st.sidebar.header("🗂️ Lịch sử Báo cáo")
@@ -188,7 +186,9 @@ def fetch_latest_news(urls):
     res = []
     for u in urls:
         try:
-            for entry in feedparser.parse(u).entries[:20]: res.append({"raw_title": entry.get('title',''), "link": entry.get('link','#'), "summary": entry.get('summary','')[:200]})
+            # ĐÃ GIẢM TẢI: Chỉ lấy 10 tin mới nhất để tiết kiệm Token Groq
+            for entry in feedparser.parse(u).entries[:10]: 
+                res.append({"raw_title": entry.get('title',''), "link": entry.get('link','#'), "summary": entry.get('summary','')[:200]})
         except: pass
     return res
 
@@ -196,7 +196,12 @@ def groq_analyze(api_key, raw_data, region, topics, top_n):
     client = Groq(api_key=api_key)
     prompt = f"Lọc {top_n} tin ở {region} về {','.join(topics)}. Tóm tắt 2 dòng. Trả về JSON: {{'data': [{{'cat':'','src':'','tit':'','lnk':'','brf':'','ins':''}}]}}. Data: {json.dumps(raw_data)}"
     try:
-        response = client.chat.completions.create(messages=[{"role": "system", "content": "You are a JSON API. Output strictly a JSON object."}, {"role": "user", "content": prompt}], model="llama-3.3-70b-versatile", temperature=0.1, response_format={"type": "json_object"})
+        response = client.chat.completions.create(
+            messages=[{"role": "system", "content": "You are a JSON API. Output strictly a JSON object."}, {"role": "user", "content": prompt}], 
+            model="llama-3.1-8b-instant", # ĐÃ ĐỔI SANG ĐỘNG CƠ TIẾT KIỆM (8B)
+            temperature=0.1, 
+            response_format={"type": "json_object"}
+        )
         return json.loads(response.choices[0].message.content).get("data", [])
     except Exception as e: return [{"cat": "Lỗi", "tit": "Lỗi lấy tin", "brf": str(e)}]
 

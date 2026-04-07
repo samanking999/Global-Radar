@@ -4,12 +4,13 @@ import google.generativeai as genai
 from groq import Groq
 import json
 import sqlite3
+import time # Thư viện để hệ thống nghỉ ngơi chống quá tải
 from datetime import datetime
 
 # ==========================================
 # 1. CẤU HÌNH GIAO DIỆN & DATABASE
 # ==========================================
-st.set_page_config(page_title="Radar Chiến Lược Toàn Cầu v13.0", layout="wide", page_icon="📡")
+st.set_page_config(page_title="Radar Chiến Lược Toàn Cầu v13.1", layout="wide", page_icon="📡")
 
 # !!! QUAN TRỌNG: SỬA EMAIL NÀY THÀNH EMAIL CỦA BẠN !!!
 MASTER_ADMIN_EMAIL = "admin@gmail.com"
@@ -125,16 +126,13 @@ current_gemini_key = get_api_key("GEMINI")
 # ==========================================
 # 3. MENU ĐIỀU KHIỂN & CÀI ĐẶT
 # ==========================================
-# Menu cấu hình Radar
 st.sidebar.markdown("---")
 st.sidebar.header("⚙️ Cấu hình Radar")
 regs = st.sidebar.multiselect("Vùng theo dõi:", ["Việt Nam 🇻🇳", "Mỹ 🇺🇸", "Trung Quốc 🇨🇳", "Châu Âu 🇪🇺"], default=["Việt Nam 🇻🇳", "Mỹ 🇺🇸"])
 topi = st.sidebar.multiselect("Lĩnh vực:", ["Bất động sản", "Kinh tế", "Chính trị", "Ngân hàng", "Công nghệ & AI"], default=["Bất động sản", "Kinh tế"])
 
-# KHÔI PHỤC MENU SỐ LƯỢNG TIN
-top_n_option = st.sidebar.selectbox("Số lượng tin hiển thị mỗi vùng:", [5, 10, 15, 20], index=0)
+top_n_option = st.sidebar.selectbox("Số lượng tin hiển thị mỗi vùng:", [5, 10, 15], index=0)
 
-# Menu Admin
 if st.session_state.is_admin:
     st.sidebar.markdown("---")
     st.sidebar.header("👑 Quản trị hệ thống")
@@ -163,7 +161,6 @@ for r_id, r_time, r_html in get_report_history():
 # ==========================================
 # 4. HÀM XỬ LÝ AI & TIN TỨC
 # ==========================================
-# Tăng cường Nguồn RSS BĐS
 RSS_FEEDS = {
     "Việt Nam 🇻🇳": ["https://vnexpress.net/rss/bat-dong-san.rss", "https://vnexpress.net/rss/kinh-doanh.rss", "https://tuoitre.vn/rss/kinh-doanh.rss"],
     "Mỹ 🇺🇸": ["https://rss.nytimes.com/services/xml/rss/nyt/RealEstate.xml", "https://rss.nytimes.com/services/xml/rss/nyt/Economy.xml"],
@@ -175,23 +172,22 @@ def groq_analyze(api_key, raw_data, region, topics, top_n):
     client = Groq(api_key=api_key)
     current_date = datetime.now().strftime("%m/%Y")
     
-    # ÉP BỘ LỌC THỜI GIAN THỰC ĐỂ CHỐNG TIN CŨ
     prompt = f"""
-    Hệ thống đang chạy vào thời điểm: Tháng {current_date}.
-    Từ danh sách tin thô bên dưới, hãy lọc ra {top_n} tin MỚI NHẤT và QUAN TRỌNG NHẤT tại {region} về: {','.join(topics)}.
+    Hệ thống đang chạy vào: Tháng {current_date}.
+    Lọc {top_n} tin MỚI NHẤT tại {region} về: {','.join(topics)}.
     
-    QUY TẮC TỐI THƯỢNG:
-    1. TUYỆT ĐỐI KHÔNG lấy các bài báo có nội dung/tiêu đề nhắc đến các năm cũ (2024 trở về trước).
-    2. Tập trung cao độ vào các tin tức Bất động sản, thị trường nhà đất mới nhất.
-    3. DỊCH 100% SANG TIẾNG VIỆT.
+    QUY TẮC:
+    1. BỎ QUA các tin từ năm 2024 trở về trước.
+    2. Tập trung Bất động sản.
+    3. DỊCH SANG TIẾNG VIỆT.
     
-    Trả về JSON: {{'data': [{{'cat':'Lĩnh vực','src':'Tên báo','tit':'Tiêu đề tiếng Việt','lnk':'Link','brf':'Tóm tắt VN','ins':'Phân tích VN'}}]}}
-    Dữ liệu nguồn: {json.dumps(raw_data)}
+    Trả về JSON: {{'data': [{{'cat':'Lĩnh vực','src':'Tên báo','tit':'Tiêu đề','lnk':'Link','brf':'Tóm tắt ngắn gọn','ins':'Phân tích'}}]}}
+    Dữ liệu: {json.dumps(raw_data)}
     """
     try:
         response = client.chat.completions.create(
             messages=[
-                {"role": "system", "content": "You are a top-tier news analyst. You only output valid JSON. You strictly filter out old news (pre-2025). All output in Vietnamese."},
+                {"role": "system", "content": "You are a news analyst. Output ONLY valid JSON. Filter old news."},
                 {"role": "user", "content": prompt}
             ],
             model="llama-3.3-70b-versatile",
@@ -199,7 +195,7 @@ def groq_analyze(api_key, raw_data, region, topics, top_n):
             response_format={"type": "json_object"}
         )
         return json.loads(response.choices[0].message.content).get("data", [])
-    except Exception as e: return [{"cat": "Lỗi", "tit": "Lỗi phân tích Groq", "brf": str(e), "src": "Hệ thống", "lnk": "#"}]
+    except Exception as e: return [{"cat": "Lỗi", "tit": "Lỗi phân tích", "brf": str(e), "src": "Hệ thống", "lnk": "#"}]
 
 def generate_html_report(news_data, outlook):
     now = datetime.now().strftime("%H:%M - %d/%m/%Y")
@@ -220,41 +216,39 @@ if st.sidebar.button("🚀 CẬP NHẬT DỮ LIỆU MỚI", type="primary", use_
     if not current_groq_key or not current_gemini_key:
         st.error("Vui lòng cấu hình API Key trong mục Admin Control.")
     else:
-        with st.spinner("🔄 Đang rà quét tin tức mới nhất..."):
+        with st.spinner("🔄 Đang rà quét tin tức, chống quá tải hệ thống..."):
             st.session_state.news_store = {}
             st.session_state.chat_history = []
             
-            # Quét tin với Groq
             for r in regs:
                 raw_news = []
                 for url in RSS_FEEDS.get(r, []):
                     f = feedparser.parse(url)
-                    for e in f.entries[:20]: # Lấy mẫu 20 tin để Groq có dữ liệu lọc bỏ tin cũ
+                    # ÉP GIẢM SỐ LƯỢNG TIN THÔ: Chỉ lấy 6 tin từ mỗi nguồn (VD 3 nguồn * 6 = 18 tin)
+                    for e in f.entries[:6]: 
                         raw_news.append({
-                            "raw_title": e.get('title',''), 
-                            "link": e.get('link','#'), 
-                            "summary": e.get('summary','')[:300]
+                            "tit": e.get('title',''), 
+                            "lnk": e.get('link','#'), 
+                            "sum": e.get('summary','')[:150] # Cắt ngắn độ dài tóm tắt thô
                         })
                 st.session_state.news_store[r] = groq_analyze(current_groq_key, raw_news, r, topi, top_n_option)
+                time.sleep(2) # CHO HỆ THỐNG NGHỈ 2 GIÂY ĐỂ TRÁNH RATE LIMIT CỦA GROQ
             
-            # Nhận định bằng Gemini 2.5 Flash
             try:
                 genai.configure(api_key=current_gemini_key)
                 gemini = genai.GenerativeModel('gemini-2.5-flash')
                 p_outlook = f"""
                 Dựa trên dữ liệu tin tức dưới đây, hãy viết một bản NHẬN ĐỊNH VĨ MÔ chuyên sâu bằng tiếng Việt.
-                Đặc biệt chú ý đến xu hướng Bất động sản và Kinh tế. Trình bày chuyên nghiệp.
                 Dữ liệu: {json.dumps(st.session_state.news_store)}
                 """
                 st.session_state.outlook_store = gemini.generate_content(p_outlook).text
             except Exception as e:
                 st.session_state.outlook_store = f"Lỗi Gemini 2.5 Flash: {str(e)}"
             
-            # Lưu báo cáo
             save_report_to_db(generate_html_report(st.session_state.news_store, st.session_state.outlook_store))
             st.rerun()
 
-# Hiển thị dữ liệu (Dạng Tab)
+# Hiển thị dữ liệu
 if "news_store" in st.session_state:
     tab_titles = list(st.session_state.news_store.keys())
     if tab_titles:
@@ -273,21 +267,20 @@ if "news_store" in st.session_state:
     st.markdown("### 📡 NHẬN ĐỊNH VĨ MÔ TỔNG HỢP (Gemini 2.5 Flash)")
     st.markdown(f'<div class="market-outlook">{st.session_state.outlook_store}</div>', unsafe_allow_html=True)
 
-    # KHUNG CHAT ASSISTANT
     st.markdown("---")
     st.subheader("💬 Trợ lý Chiến lược")
     for msg in st.session_state.chat_history:
         with st.chat_message(msg["role"]): st.write(msg["content"])
         
-    if chat_input := st.chat_input("VD: Tình hình bất động sản Việt Nam hôm nay thế nào?"):
+    if chat_input := st.chat_input("VD: Tình hình bất động sản hôm nay?"):
         st.session_state.chat_history.append({"role": "user", "content": chat_input})
         with st.chat_message("user"): st.write(chat_input)
         with st.chat_message("assistant"):
             try:
                 genai.configure(api_key=current_gemini_key)
                 res = genai.GenerativeModel('gemini-2.5-flash').generate_content(
-                    f"Dữ liệu bản tin hôm nay: {json.dumps(st.session_state.news_store)}\n\nHỏi: {chat_input}"
+                    f"Dữ liệu: {json.dumps(st.session_state.news_store)}\nHỏi: {chat_input}"
                 )
                 st.write(res.text)
                 st.session_state.chat_history.append({"role": "assistant", "content": res.text})
-            except Exception as e: st.error(f"Lỗi hệ thống Chat: {e}")
+            except Exception as e: st.error(f"Lỗi Chat: {e}")

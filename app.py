@@ -9,7 +9,7 @@ from datetime import datetime
 # ==========================================
 # 1. CẤU HÌNH GIAO DIỆN & DATABASE
 # ==========================================
-st.set_page_config(page_title="Radar Chiến Lược Toàn Cầu v12.7", layout="wide", page_icon="📡")
+st.set_page_config(page_title="Radar Chiến Lược Toàn Cầu v12.8", layout="wide", page_icon="📡")
 
 # !!! QUAN TRỌNG: SỬA EMAIL NÀY THÀNH EMAIL CỦA BẠN !!!
 MASTER_ADMIN_EMAIL = "admin@gmail.com"
@@ -29,7 +29,7 @@ def init_db():
 
 init_db()
 
-# --- Các hàm Database ---
+# --- Các hàm Database (Giữ nguyên từ bản 12.7) ---
 def add_user(email, role="user"):
     try:
         conn = sqlite3.connect('radar_database.db'); c = conn.cursor()
@@ -70,7 +70,6 @@ def save_report_to_db(html_content):
     run_time = datetime.now().strftime("%H:%M - %d/%m/%Y")
     c.execute("INSERT INTO reports (run_time, html_content) VALUES (?, ?)", (run_time, html_content))
     conn.commit()
-    # Vá lỗi SQL OFFSET: Thêm LIMIT -1
     c.execute("SELECT id FROM reports ORDER BY id DESC LIMIT -1 OFFSET 20")
     for row in c.fetchall(): c.execute("DELETE FROM reports WHERE id=?", (row[0],))
     conn.commit(); conn.close()
@@ -80,7 +79,7 @@ def get_report_history():
     c.execute("SELECT id, run_time, html_content FROM reports ORDER BY id DESC")
     records = c.fetchall(); conn.close(); return records
 
-# CSS
+# CSS Cải tiến
 st.markdown("""
 <style>
     .news-card { background: #fff; padding: 18px; border-radius: 10px; margin-bottom: 15px; border-left: 5px solid #0056b3; box-shadow: 0 4px 6px rgba(0,0,0,0.05); border: 1px solid #eee; }
@@ -88,6 +87,9 @@ st.markdown("""
     .news-title-link { font-size: 17px; font-weight: bold; color: #0056b3; text-decoration: none; display: block; margin-bottom: 8px; margin-top: 8px; line-height: 1.4; }
     .news-insight { font-size: 13px; font-style: italic; color: #155724; background: #d4edda; padding: 10px; border-radius: 5px; border-left: 3px solid #28a745; }
     .market-outlook { background: #111; color: #00ff41; padding: 25px; border-radius: 8px; font-family: 'Courier New', Courier, monospace; white-space: pre-wrap; line-height: 1.6; border: 1px solid #00ff41; }
+    .stTabs [data-baseweb="tab-list"] { gap: 10px; }
+    .stTabs [data-baseweb="tab"] { background-color: #f0f2f6; border-radius: 5px 5px 0 0; padding: 10px 20px; }
+    .stTabs [aria-selected="true"] { background-color: #0056b3 !important; color: white !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -122,32 +124,25 @@ current_gemini_key = get_api_key("GEMINI")
 # Menu Admin
 if st.session_state.is_admin:
     st.sidebar.markdown("---")
-    st.sidebar.header("👑 Quản trị hệ thống")
-    with st.sidebar.expander("🔑 Cấu hình API Keys"):
+    st.sidebar.header("👑 Quản trị")
+    with st.sidebar.expander("🔑 API Keys"):
         if current_groq_key and current_gemini_key:
-            st.success("✅ API Keys đã được lưu trữ")
-            if st.button("🔄 Cập nhật lại Keys"): reset_all_api_keys(); st.rerun()
+            st.success("✅ Đã có Keys")
+            if st.button("🔄 Reset Keys"): reset_all_api_keys(); st.rerun()
         else:
-            g_key = st.text_input("Groq API Key:", type="password")
-            m_key = st.text_input("Gemini API Key:", type="password")
+            g_key = st.text_input("Groq Key:", type="password")
+            m_key = st.text_input("Gemini Key:", type="password")
             if st.button("Lưu cấu hình"):
-                if g_key and m_key:
-                    add_api_key("GROQ", g_key); add_api_key("GEMINI", m_key); st.rerun()
-
-    with st.sidebar.expander("👥 Quản lý Người dùng"):
-        new_u = st.text_input("Email người mới:").lower().strip()
-        role_u = st.selectbox("Quyền hạn:", ["user", "admin"])
-        if st.button("Thêm"):
-            if add_user(new_u, role_u): st.success("Đã thêm thành công!"); st.rerun()
+                if g_key and m_key: add_api_key("GROQ", g_key); add_api_key("GEMINI", m_key); st.rerun()
 
 st.sidebar.markdown("---")
-st.sidebar.header("🗂️ Lịch sử Báo cáo")
+st.sidebar.header("🗂️ Lịch sử")
 for r_id, r_time, r_html in get_report_history():
     with st.sidebar.expander(f"🕒 {r_time}"):
-        st.download_button("📥 Tải Báo Cáo", data=r_html, file_name=f"Radar_{r_id}.html", mime="text/html", key=f"dl_{r_id}")
+        st.download_button("📥 Tải HTML", data=r_html, file_name=f"Radar_{r_id}.html", mime="text/html", key=f"dl_{r_id}")
 
 # ==========================================
-# 3. HÀM XỬ LÝ AI & TIN TỨC
+# 3. HÀM XỬ LÝ AI (Bổ sung Bất động sản)
 # ==========================================
 RSS_FEEDS = {
     "Mỹ 🇺🇸": ["https://rss.nytimes.com/services/xml/rss/nyt/World.xml", "http://rss.cnn.com/rss/edition_world.rss"],
@@ -160,14 +155,15 @@ def groq_analyze(api_key, raw_data, region, topics, top_n):
     client = Groq(api_key=api_key)
     prompt = f"""
     Lọc {top_n} tin từ vùng {region} về các chủ đề: {','.join(topics)}.
-    YÊU CẦU: DỊCH 100% SANG TIẾNG VIỆT (Tiêu đề, Tóm tắt, Nhận định).
-    Trả về JSON: {{'data': [{{'cat':'Lĩnh vực','src':'Tên báo (VD: CNN)','tit':'Tiêu đề tiếng Việt','lnk':'Link','brf':'Tóm tắt 2 dòng VN','ins':'Phân tích sâu VN'}}]}}
-    Dữ liệu nguồn: {json.dumps(raw_data)}
+    ĐẶC BIỆT CHÚ TRỌNG: Các tin tức về Bất động sản, lãi suất và chính sách nhà ở.
+    YÊU CẦU: DỊCH 100% SANG TIẾNG VIỆT.
+    Trả về JSON: {{'data': [{{'cat':'Lĩnh vực','src':'Tên báo','tit':'Tiêu đề VN','lnk':'Link','brf':'Tóm tắt VN','ins':'Phân tích VN'}}]}}
+    Dữ liệu: {json.dumps(raw_data)}
     """
     try:
         response = client.chat.completions.create(
             messages=[
-                {"role": "system", "content": "You are a world-class news analyst. Output ONLY a valid JSON object. All content must be in Vietnamese."},
+                {"role": "system", "content": "You are a professional news analyst. Output ONLY JSON in Vietnamese."},
                 {"role": "user", "content": prompt}
             ],
             model="llama-3.3-70b-versatile",
@@ -175,70 +171,57 @@ def groq_analyze(api_key, raw_data, region, topics, top_n):
             response_format={"type": "json_object"}
         )
         return json.loads(response.choices[0].message.content).get("data", [])
-    except Exception as e: return [{"cat": "Lỗi", "tit": "Lỗi phân tích Groq", "brf": str(e), "src": "Hệ thống", "lnk": "#"}]
-
-def generate_html_report(news_data, outlook):
-    now = datetime.now().strftime("%H:%M - %d/%m/%Y")
-    html = f"<html><body style='font-family:sans-serif;padding:30px;line-height:1.6;'><h1>Báo Cáo Radar Chiến Lược {now}</h1>"
-    html += f"<div style='background:#111;color:#0f0;padding:25px;border-radius:10px;'><h3>📊 Nhận định vĩ mô:</h3><p>{outlook.replace(chr(10), '<br>')}</p></div>"
-    for reg, items in news_data.items():
-        html += f"<h2 style='border-bottom:2px solid #0056b3;padding-top:20px;'>📍 {reg}</h2>"
-        for i in items:
-            html += f"<div style='margin-bottom:20px;border-bottom:1px solid #eee;padding-bottom:10px;'><b>[{i.get('cat','Chung')}] {i.get('src','Nguồn')}</b><br><a href='{i.get('lnk','#')}'><b>{i.get('tit','Tiêu đề')}</b></a><p>{i.get('brf','')}</p><i>💡 Phân tích: {i.get('ins','')}</i></div>"
-    return html + "</body></html>"
+    except Exception as e: return [{"cat": "Lỗi", "tit": "Lỗi Groq", "brf": str(e), "src": "Hệ thống", "lnk": "#"}]
 
 # ==========================================
-# 4. GIAO DIỆN CHÍNH & LUỒNG CHẠY
+# 4. GIAO DIỆN CHÍNH
 # ==========================================
 st.title("🌍 Radar Chiến Lược Toàn Cầu")
 
 regs = st.sidebar.multiselect("Vùng theo dõi:", list(RSS_FEEDS.keys()), default=["Mỹ 🇺🇸", "Việt Nam 🇻🇳"])
-topi = st.sidebar.multiselect("Lĩnh vực:", ["Kinh tế", "Chính trị", "Ngân hàng", "Công nghệ & AI", "Quân sự"], default=["Kinh tế", "Chính trị"])
+# Bổ sung Bất động sản vào danh mục quan tâm
+topi = st.sidebar.multiselect("Lĩnh vực:", ["Kinh tế", "Bất động sản", "Chính trị", "Ngân hàng", "Công nghệ & AI"], default=["Kinh tế", "Bất động sản"])
 
-if st.sidebar.button("🚀 CẬP NHẬT DỮ LIỆU (HYBRID AI)", type="primary", use_container_width=True):
+if st.sidebar.button("🚀 CẬP NHẬT DỮ LIỆU MỚI", type="primary", use_container_width=True):
     if not current_groq_key or not current_gemini_key:
-        st.error("Vui lòng cấu hình API Key trong mục Admin Control.")
+        st.error("Thiếu API Keys!")
     else:
-        with st.spinner("🔄 Llama 3.3 & Gemini 2.5 đang phối hợp xử lý..."):
+        with st.spinner("🔄 Đang quét tin tức toàn cầu..."):
             st.session_state.news_store = {}
-            # Bước 1: Quét và tóm tắt tin bằng Groq
             for r in regs:
                 raw_news = []
                 for url in RSS_FEEDS[r]:
                     f = feedparser.parse(url)
-                    for e in f.entries[:10]:
-                        raw_news.append({"raw_title": e.get('title',''), "link": e.get('link','#'), "summary": e.get('summary','')[:200]})
+                    for e in f.entries[:15]: # Tăng lượng tin thô để AI lọc tốt hơn
+                        raw_news.append({"raw_title": e.get('title',''), "link": e.get('link','#'), "summary": e.get('summary','')[:300]})
                 st.session_state.news_store[r] = groq_analyze(current_groq_key, raw_news, r, topi, 5)
             
-            # Bước 2: Viết nhận định vĩ mô bằng Gemini 2.5 Flash
             try:
                 genai.configure(api_key=current_gemini_key)
-                # Đổi về model 2.5-flash theo yêu cầu
                 gemini = genai.GenerativeModel('gemini-2.5-flash')
-                p_outlook = f"""
-                Dựa trên dữ liệu tin tức thô dưới đây, hãy viết một bản NHẬN ĐỊNH VĨ MÔ chuyên sâu bằng tiếng Việt.
-                Yêu cầu: Phân tích sự liên kết giữa các sự kiện, đưa ra dự báo tác động. Trình bày chuyên nghiệp.
-                Dữ liệu: {json.dumps(st.session_state.news_store)}
-                """
+                p_outlook = f"Dựa trên dữ liệu sau (chú trọng mảng Bất động sản & Kinh tế), hãy viết nhận định vĩ mô tiếng Việt sâu sắc: {json.dumps(st.session_state.news_store)}"
                 st.session_state.outlook_store = gemini.generate_content(p_outlook).text
-            except Exception as e:
-                st.session_state.outlook_store = f"Lỗi Gemini 2.5 Flash: {str(e)}"
+            except Exception as e: st.session_state.outlook_store = f"Lỗi Gemini: {e}"
             
-            # Bước 3: Lưu báo cáo
-            save_report_to_db(generate_html_report(st.session_state.news_store, st.session_state.outlook_store))
             st.rerun()
 
-# Hiển thị dữ liệu
+# --- HIỂN THỊ THEO TAB ---
 if "news_store" in st.session_state:
-    for reg, items in st.session_state.news_store.items():
-        st.subheader(f"📍 {reg}")
-        for i in items:
-            st.markdown(f"""<div class="news-card">
-                <span class="news-category">{i.get('cat','Chung')}</span> | <b>{i.get('src','Nguồn')}</b>
-                <a class="news-title-link" href="{i.get('lnk','#')}" target="_blank">{i.get('tit','Tiêu đề')}</a>
-                <p>{i.get('brf','')}</p>
-                <div class="news-insight">💡 <b>Phân tích:</b> {i.get('ins','')}</div>
-            </div>""", unsafe_allow_html=True)
+    # Tạo danh sách các Tab tương ứng với số nước đã chọn
+    tab_titles = list(st.session_state.news_store.keys())
+    if tab_titles:
+        tabs = st.tabs(tab_titles)
+        
+        for index, region in enumerate(tab_titles):
+            with tabs[index]:
+                st.markdown(f"### 📍 Tin tức tại {region}")
+                for i in st.session_state.news_store[region]:
+                    st.markdown(f"""<div class="news-card">
+                        <span class="news-category">{i.get('cat','Chung')}</span> | <b>{i.get('src','Nguồn')}</b>
+                        <a class="news-title-link" href="{i.get('lnk','#')}" target="_blank">{i.get('tit','Tiêu đề')}</a>
+                        <p>{i.get('brf','')}</p>
+                        <div class="news-insight">💡 <b>Phân tích:</b> {i.get('ins','')}</div>
+                    </div>""", unsafe_allow_html=True)
     
-    st.markdown("### 📡 NHẬN ĐỊNH VĨ MÔ (Gemini 2.5 Flash)")
+    st.markdown("### 📡 NHẬN ĐỊNH VĨ MÔ TỔNG HỢP (Gemini 2.5 Flash)")
     st.markdown(f'<div class="market-outlook">{st.session_state.outlook_store}</div>', unsafe_allow_html=True)

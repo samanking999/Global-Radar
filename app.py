@@ -12,7 +12,7 @@ from datetime import datetime
 # ==========================================
 # 1. CẤU HÌNH GIAO DIỆN & DATABASE
 # ==========================================
-st.set_page_config(page_title="Radar Chiến Lược Toàn Cầu v15.0", layout="wide", page_icon="📡")
+st.set_page_config(page_title="Radar Chiến Lược Toàn Cầu v15.1", layout="wide", page_icon="📡")
 
 MASTER_ADMIN_EMAIL = "admin@gmail.com" # SỬA EMAIL CỦA BẠN TẠI ĐÂY
 
@@ -44,6 +44,11 @@ def check_user_access(email):
     c.execute("SELECT role FROM users WHERE email=?", (email.strip().lower(),))
     res = c.fetchone(); return res[0] if res else None
 
+def get_all_users():
+    conn = sqlite3.connect('radar_database.db'); c = conn.cursor()
+    c.execute("SELECT email, role FROM users")
+    res = c.fetchall(); conn.close(); return res
+
 def add_api_key(platform, key_value):
     conn = sqlite3.connect('radar_database.db'); c = conn.cursor()
     c.execute("DELETE FROM api_keys WHERE platform=?", (platform,))
@@ -54,10 +59,6 @@ def get_api_key(platform):
     conn = sqlite3.connect('radar_database.db'); c = conn.cursor()
     c.execute("SELECT key_value FROM api_keys WHERE platform=? ORDER BY id DESC LIMIT 1", (platform,))
     res = c.fetchone(); return res[0] if res else None
-
-def reset_all_api_keys():
-    conn = sqlite3.connect('radar_database.db'); c = conn.cursor()
-    c.execute("DELETE FROM api_keys"); conn.commit(); conn.close()
 
 def save_report_to_db(html_content):
     conn = sqlite3.connect('radar_database.db'); c = conn.cursor()
@@ -72,7 +73,6 @@ def get_report_history():
     c.execute("SELECT id, run_time, html_content FROM reports ORDER BY id DESC")
     return c.fetchall()
 
-# --- Hàm Lưu & Tải Cài Đặt Người Dùng (Tính năng mới) ---
 def save_prefs(email, regs, topi, top_n):
     conn = sqlite3.connect('radar_database.db'); c = conn.cursor()
     c.execute("REPLACE INTO user_prefs (email, regs, topi, top_n) VALUES (?, ?, ?, ?)", (email, json.dumps(regs), json.dumps(topi), top_n))
@@ -83,10 +83,10 @@ def load_prefs(email):
     c.execute("SELECT regs, topi, top_n FROM user_prefs WHERE email=?", (email,))
     res = c.fetchone(); conn.close()
     if res: return json.loads(res[0]), json.loads(res[1]), res[2]
-    return ["Việt Nam 🇻🇳", "Mỹ 🇺🇸"], ["Tài chính", "Bất động sản"], 15
+    return ["Việt Nam 🇻🇳", "Mỹ 🇺🇸"], ["Tài chính", "Kinh tế"], 15
 
 # ==========================================
-# GIAO DIỆN CSS (ĐÃ THU NHỎ FONT CHỮ DÀNH CHO MOBILE)
+# GIAO DIỆN CSS (TỐI ƯU MOBILE MẠNH MẼ)
 # ==========================================
 st.markdown("""
 <style>
@@ -120,26 +120,17 @@ if not st.session_state.logged_in:
                 st.session_state.user_email = email
                 st.session_state.is_admin = (role == "admin")
                 st.rerun()
-            else: st.error("Email không có quyền!")
+            else: st.error("Email chưa được mời. Hãy liên hệ Admin!")
     st.stop()
 
 current_groq_key = get_api_key("GROQ")
 current_gemini_key = get_api_key("GEMINI")
 
-# Quản lý Sidebar (Chỉ dành cho Admin và Đăng xuất)
 st.sidebar.success(f"👤 {st.session_state.user_email}")
 if st.sidebar.button("Đăng xuất"): st.session_state.logged_in = False; st.rerun()
 
-if st.session_state.is_admin:
-    st.sidebar.markdown("---")
-    st.sidebar.header("👑 Quản trị API")
-    if st.sidebar.button("🔄 Đặt lại Keys"): reset_all_api_keys(); st.rerun()
-    g_key = st.sidebar.text_input("Groq Key:", type="password")
-    m_key = st.sidebar.text_input("Gemini Key:", type="password")
-    if st.sidebar.button("Lưu cấu hình"): add_api_key("GROQ", g_key); add_api_key("GEMINI", m_key); st.rerun()
-
 # ==========================================
-# 3. KHO DỮ LIỆU & HÀM LỌC AI
+# 3. KHO DỮ LIỆU & HÀM AI LỌC NGHIÊM NGẶT
 # ==========================================
 RSS_FEEDS = {
     "Việt Nam 🇻🇳": [
@@ -155,12 +146,11 @@ RSS_FEEDS = {
     ],
     "Trung Quốc 🇨🇳": [
         "https://www.scmp.com/rss/318198/feed", "https://www.scmp.com/rss/318200/feed",
-        "https://www.scmp.com/rss/318202/feed", "http://www.xinhuanet.com/english/rss/business.xml",
-        "https://www.ft.com/chinese-economy?format=rss", "https://www.ft.com/china-politics?format=rss"
+        "https://www.scmp.com/rss/318202/feed", "http://www.xinhuanet.com/english/rss/business.xml"
     ],
     "Châu Âu 🇪🇺": [
         "http://feeds.bbci.co.uk/news/world/europe/rss.xml", "http://feeds.bbci.co.uk/news/business/rss.xml",
-        "https://www.france24.com/en/business/rss", "https://www.dw.com/en/business/s-1431"
+        "https://www.dw.com/en/business/s-1431"
     ]
 }
 
@@ -181,19 +171,22 @@ def get_source_name(url):
 def groq_analyze(api_key, raw_data, region, topics, top_n):
     client = Groq(api_key=api_key)
     current_date = datetime.now().strftime("%m/%Y")
+    
+    # BỨC TƯỜNG LỬA (FIREWALL) TRÁNH LẠC ĐỀ
     prompt = f"""
     Tháng {current_date}. Chọn đúng {top_n} tin tại {region} từ danh sách dưới đây.
-    LUẬT THÉP:
-    1. ĐÚNG CHỦ ĐỀ: Lấy đúng các tin thuộc: {','.join(topics)}. Không chọn sai lĩnh vực.
-    2. KHÔNG LẶP LẠI. Bỏ qua tin năm 2024.
-    3. GIỮ NGUYÊN ID. 
-    4. DỊCH 100% TIẾNG VIỆT.
+    
+    BỨC TƯỜNG LỬA VỀ CHỦ ĐỀ:
+    1. NGƯỜI DÙNG CHỈ QUAN TÂM: {','.join(topics)}. Bạn CHỈ ĐƯỢC PHÉP chọn tin thuộc nhóm này.
+    2. LỆNH CẤM: Nếu danh sách trên KHÔNG có chữ "Chính trị", TUYỆT ĐỐI LOẠI BỎ các tin về bầu cử, tổng thống, ngoại giao. Nếu danh sách KHÔNG có chữ "Bất động sản", TUYỆT ĐỐI BỎ QUA tin nhà đất.
+    3. Giữ nguyên chuỗi 'id' của bài báo bạn chọn. Không lặp lại tin. Bỏ qua tin cũ. DỊCH 100% TIẾNG VIỆT.
+    
     JSON Format: {{'data': [{{'id':'(ID)','cat':'Tên lĩnh vực','src':'Tên báo','tit':'Tiêu đề VN','brf':'Tóm tắt VN','ins':'Phân tích VN'}}]}}
     Dữ liệu: {json.dumps(raw_data, ensure_ascii=False)}
     """
     try:
         res = client.chat.completions.create(
-            messages=[{"role": "system", "content": "You are a JSON API. Output in Vietnamese."}, {"role": "user", "content": prompt}],
+            messages=[{"role": "system", "content": "You are a JSON API. Strictly enforce topic filtering. Never mix politics into economics unless explicitly requested. Output in Vietnamese."}, {"role": "user", "content": prompt}],
             model="llama-3.3-70b-versatile", temperature=0.1, response_format={"type": "json_object"}
         )
         return json.loads(res.choices[0].message.content).get("data", [])
@@ -210,30 +203,50 @@ def generate_html_report(news_data, outlook):
     return html + "</body></html>"
 
 # ==========================================
-# 4. GIAO DIỆN CHÍNH (ĐƯA BẢNG ĐIỀU KHIỂN RA TRANG CHỦ)
+# 4. GIAO DIỆN CHÍNH (THÂN THIỆN MOBILE)
 # ==========================================
 st.title("🌍 Radar Chiến Lược Toàn Cầu")
 
-# Tải cài đặt cũ của người dùng
+# MENU QUẢN TRỊ ADMIN (Đưa ra màn hình chính)
+if st.session_state.is_admin:
+    with st.expander("👑 MENU QUẢN TRỊ & MỜI THÀNH VIÊN (Chỉ Admin)"):
+        st.subheader("📩 Mời người dùng (Invite)")
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            invite_email = st.text_input("Nhập Email cần mời:").lower().strip()
+        with col2:
+            invite_role = st.selectbox("Cấp quyền:", ["user", "admin"])
+        if st.button("Gửi Lời Mời & Lưu"):
+            if invite_email:
+                if add_user(invite_email, invite_role): st.success(f"✅ Đã cấp quyền cho {invite_email}! Họ có thể đăng nhập ngay.")
+                else: st.warning("⚠️ Email này đã tồn tại trong hệ thống.")
+            else: st.error("Vui lòng nhập email.")
+            
+        st.markdown("---")
+        st.subheader("🔑 Cấu hình API Keys")
+        g_key = st.text_input("Groq Key:", type="password")
+        m_key = st.text_input("Gemini Key:", type="password")
+        if st.button("Lưu API Keys"): 
+            if g_key and m_key: add_api_key("GROQ", g_key); add_api_key("GEMINI", m_key); st.success("Lưu thành công!")
+
+# Tải cài đặt cũ
 def_regs, def_topi, def_top_n = load_prefs(st.session_state.user_email)
 
-# Khung điều khiển ngay trên giao diện Mobile
-with st.expander("⚙️ BẢNG ĐIỀU KHIỂN (Bấm để mở/đóng)", expanded=True):
+# BẢNG ĐIỀU KHIỂN RADAR
+with st.expander("⚙️ BẢNG ĐIỀU KHIỂN RADAR", expanded=True):
     regs = st.multiselect("Vùng theo dõi:", list(RSS_FEEDS.keys()), default=def_regs)
     topi = st.multiselect("Lĩnh vực:", ["Tài chính", "Bất động sản", "Kinh tế", "Chính trị", "Ngân hàng", "Công nghệ & AI"], default=def_topi)
     
-    # Bắt lỗi index nếu giá trị cũ không nằm trong danh sách
     try: index_top_n = [10, 15, 20, 25].index(def_top_n)
     except ValueError: index_top_n = 1
     top_n_option = st.selectbox("Số lượng tin hiển thị mỗi vùng:", [10, 15, 20, 25], index=index_top_n)
 
     if st.button("🚀 CẬP NHẬT DỮ LIỆU", type="primary", use_container_width=True):
-        if not current_groq_key or not current_gemini_key: st.error("Chưa có API Key!")
+        if not current_groq_key or not current_gemini_key: st.error("Hệ thống chưa có API Key! (Admin cần nhập ở Menu Quản trị)")
         else:
-            # Lưu lại cấu hình cho lần sau
-            save_prefs(st.session_state.user_email, regs, topi, top_n_option)
+            save_prefs(st.session_state.user_email, regs, topi, top_n_option) # Tự lưu
             
-            with st.spinner("Đang cào dữ liệu, lọc thông minh và phân tích..."):
+            with st.spinner("Đang lọc thông tin và xử lý..."):
                 st.session_state.news_store = {}; st.session_state.chat_history = []
                 for r in regs:
                     raw_news = []
@@ -273,7 +286,7 @@ with st.expander("⚙️ BẢNG ĐIỀU KHIỂN (Bấm để mở/đóng)", expa
                 try:
                     genai.configure(api_key=current_gemini_key)
                     gemini = genai.GenerativeModel('gemini-2.5-flash')
-                    st.session_state.outlook_store = gemini.generate_content(f"Nhận định vĩ mô chuyên sâu. Tập trung vào {','.join(topi)}: {json.dumps(st.session_state.news_store)}").text
+                    st.session_state.outlook_store = gemini.generate_content(f"Nhận định vĩ mô sâu sắc. Dữ liệu: {json.dumps(st.session_state.news_store)}").text
                 except Exception as e: st.session_state.outlook_store = f"Lỗi Gemini: {e}"
                 
                 save_report_to_db(generate_html_report(st.session_state.news_store, st.session_state.outlook_store))
@@ -313,12 +326,10 @@ if "news_store" in st.session_state:
                 st.session_state.chat_history.append({"role": "assistant", "content": res.text})
             except Exception as e: st.error(f"Lỗi: {e}")
 
-# Kéo kho Lịch Sử ra ngoài màn hình chính để dễ tìm trên điện thoại
 st.markdown("---")
 with st.expander("🗂️ LỊCH SỬ BÁO CÁO (Click để tải)"):
     history = get_report_history()
-    if not history:
-        st.caption("Chưa có báo cáo nào.")
+    if not history: st.caption("Chưa có báo cáo nào.")
     else:
         for r_id, r_time, r_html in history:
-            st.download_button(f"📥 Báo Cáo lúc {r_time}", data=r_html, file_name=f"Radar_{r_id}.html", mime="text/html", key=f"dl_main_{r_id}")
+            st.download_button(f"📥 Báo Cáo lúc {r_time}", data=r_html, file_name=f"Radar_{r_id}.html", mime="text/html", key=f"dl_{r_id}")

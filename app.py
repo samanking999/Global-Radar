@@ -12,7 +12,7 @@ from datetime import datetime
 # ==========================================
 # 1. CẤU HÌNH GIAO DIỆN & DATABASE
 # ==========================================
-st.set_page_config(page_title="Radar Chiến Lược Toàn Cầu v14.1", layout="wide", page_icon="📡")
+st.set_page_config(page_title="Radar Chiến Lược Toàn Cầu v14.2", layout="wide", page_icon="📡")
 
 MASTER_ADMIN_EMAIL = "admin@gmail.com" # SỬA EMAIL CỦA BẠN TẠI ĐÂY
 
@@ -120,7 +120,7 @@ current_gemini_key = get_api_key("GEMINI")
 st.sidebar.markdown("---")
 st.sidebar.header("⚙️ Cấu hình Radar")
 regs = st.sidebar.multiselect("Vùng theo dõi:", ["Việt Nam 🇻🇳", "Mỹ 🇺🇸", "Trung Quốc 🇨🇳", "Châu Âu 🇪🇺"], default=["Việt Nam 🇻🇳", "Mỹ 🇺🇸"])
-topi = st.sidebar.multiselect("Lĩnh vực:", ["Tài chính", "Bất động sản", "Kinh tế", "Chính trị", "Ngân hàng", "Công nghệ & AI"], default=["Tài chính", "Kinh tế"])
+topi = st.sidebar.multiselect("Lĩnh vực:", ["Tài chính", "Bất động sản", "Kinh tế", "Chính trị", "Ngân hàng", "Công nghệ & AI"], default=["Tài chính", "Bất động sản"])
 top_n_option = st.sidebar.selectbox("Số lượng tin hiển thị mỗi vùng:", [10, 15, 20, 25], index=1)
 
 RSS_FEEDS = {
@@ -130,14 +130,14 @@ RSS_FEEDS = {
         "https://thanhnien.vn/rss/kinh-te.rss", "https://thanhnien.vn/rss/tai-chinh-chung-khoan.rss",
         "https://vietnamnet.vn/rss/kinh-doanh.rss", "https://vietnamnet.vn/rss/bat-dong-san.rss",
         "https://dantri.com.vn/rss/kinh-doanh.rss", "https://dantri.com.vn/rss/bat-dong-san.rss",
-        "https://cafef.vn/rss/tai-chinh-ngan-hang.rss", "https://cafef.vn/rss/bat-dong-san.rss", "https://cafef.vn/rss/vi-mo-dau-tu.rss"
+        "https://cafef.vn/rss/tai-chinh-ngan-hang.rss", "https://cafef.vn/rss/bat-dong-san.rss"
     ],
     "Mỹ 🇺🇸": [
         "https://rss.nytimes.com/services/xml/rss/nyt/Economy.xml", "https://rss.nytimes.com/services/xml/rss/nyt/RealEstate.xml", 
         "https://rss.nytimes.com/services/xml/rss/nyt/Politics.xml", "https://rss.nytimes.com/services/xml/rss/nyt/Technology.xml",
         "http://rss.cnn.com/rss/money_latest.rss", "http://rss.cnn.com/rss/cnn_allpolitics.rss", "http://rss.cnn.com/rss/cnn_tech.rss",
-        "https://www.cnbc.com/id/10000664/device/rss", "https://www.cnbc.com/id/10001147/device/rss",
-        "https://www.cnbc.com/id/10000115/device/rss", "https://feeds.foxnews.com/foxnews/politics"
+        "https://www.cnbc.com/id/10000664/device/rss", "https://www.cnbc.com/id/10000115/device/rss",
+        "https://feeds.foxnews.com/foxnews/politics"
     ],
     "Trung Quốc 🇨🇳": [
         "https://www.scmp.com/rss/318198/feed", "https://www.scmp.com/rss/318200/feed",
@@ -153,6 +153,26 @@ RSS_FEEDS = {
     ]
 }
 
+# Python tự động nhận diện tên báo thay vì bắt AI tự mò từ link
+def get_source_name(url):
+    if "vnexpress" in url: return "VnExpress"
+    if "tuoitre" in url: return "Tuổi Trẻ"
+    if "thanhnien" in url: return "Thanh Niên"
+    if "vietnamnet" in url: return "VietnamNet"
+    if "dantri" in url: return "Dân Trí"
+    if "cafef" in url: return "CafeF"
+    if "nytimes" in url: return "New York Times"
+    if "cnn" in url: return "CNN"
+    if "cnbc" in url: return "CNBC"
+    if "foxnews" in url: return "Fox News"
+    if "scmp" in url: return "SCMP"
+    if "xinhuanet" in url: return "Xinhua"
+    if "ft.com" in url: return "Financial Times"
+    if "bbc" in url: return "BBC"
+    if "france24" in url: return "France 24"
+    if "dw.com" in url: return "DW"
+    return "Báo Quốc Tế"
+
 if st.session_state.is_admin:
     st.sidebar.markdown("---")
     st.sidebar.header("👑 Quản trị")
@@ -164,34 +184,31 @@ if st.session_state.is_admin:
             g_key = st.text_input("Groq Key:", type="password")
             m_key = st.text_input("Gemini Key:", type="password")
             if st.button("Lưu cấu hình"): add_api_key("GROQ", g_key); add_api_key("GEMINI", m_key); st.rerun()
-    with st.sidebar.expander("👥 Quản lý User"):
-        new_u = st.text_input("Email:").lower().strip()
-        role_u = st.selectbox("Quyền:", ["user", "admin"])
-        if st.button("Thêm"): add_user(new_u, role_u); st.rerun()
 
 # ==========================================
-# 4. HÀM XỬ LÝ AI (LUẬT THÉP)
+# 4. HÀM XỬ LÝ AI (SỬ DỤNG MẶT NẠ URL)
 # ==========================================
 def groq_analyze(api_key, raw_data, region, topics, top_n):
     client = Groq(api_key=api_key)
     current_date = datetime.now().strftime("%m/%Y")
     
+    # Prompt yêu cầu AI nhận dữ liệu đã được gán ID và phải trả về ID tương ứng
     prompt = f"""
     Hôm nay: Tháng {current_date}.
-    Dưới đây là danh sách tiêu đề và tóm tắt gốc tại {region}. Hãy chọn ra ĐÚNG {top_n} tin QUAN TRỌNG NHẤT.
+    Chọn đúng {top_n} tin QUAN TRỌNG NHẤT tại {region} từ danh sách dưới đây.
 
-    LUẬT THÉP (BẮT BUỘC TUÂN THỦ):
-    1. ĐÚNG CHỦ ĐỀ CHỌN LỌC: CHỈ ĐƯỢC LẤY các tin thuộc nhóm: {','.join(topics)}. NẾU TIN KHÔNG THUỘC CÁC CHỦ ĐỀ NÀY, BỎ QUA NGAY LẬP TỨC. (VD: Không lấy Bất động sản nếu người dùng không chọn).
-    2. KHÔNG TRÙNG LẶP: Mỗi bài báo phải nói về một sự kiện khác biệt hoàn toàn.
-    3. LOẠI TIN CŨ: Bỏ qua toàn bộ tin từ năm 2024 trở về trước.
-    4. DỊCH VÀ PHÂN TÍCH: Dựa vào Tóm tắt gốc (summary), hãy viết lại một đoạn Tóm tắt chi tiết bằng tiếng Việt và 1 câu Phân tích chuyên sâu.
+    LUẬT THÉP:
+    1. ĐÚNG CHỦ ĐỀ: CHỈ được lấy các tin thuộc các nhóm này: {','.join(topics)}. KHÔNG chọn sai lĩnh vực.
+    2. KHÔNG LẶP LẠI. Bỏ qua tin cũ năm 2024.
+    3. GIỮ NGUYÊN ID: Bạn PHẢI trả về chính xác chuỗi 'id' của bài báo bạn chọn.
+    4. DỊCH 100% TIẾNG VIỆT. Tóm tắt và đưa ra phân tích sâu sắc.
     
-    Trả về JSON: {{'data': [{{'cat':'Tên lĩnh vực','src':'Tên báo','tit':'Tiêu đề tiếng Việt','lnk':'Link','brf':'Tóm tắt chi tiết (VN)','ins':'Phân tích sâu (VN)'}}]}}
-    Dữ liệu thô: {json.dumps(raw_data)}
+    JSON Format: {{'data': [{{'id':'(ID tương ứng)','cat':'Tên lĩnh vực','src':'Tên báo','tit':'Tiêu đề VN','brf':'Tóm tắt VN','ins':'Phân tích VN'}}]}}
+    Dữ liệu: {json.dumps(raw_data, ensure_ascii=False)}
     """
     try:
         res = client.chat.completions.create(
-            messages=[{"role": "system", "content": "You are a JSON API. Strictly enforce topic filtering. Do not duplicate. Output in Vietnamese."}, {"role": "user", "content": prompt}],
+            messages=[{"role": "system", "content": "You are a JSON API. Strictly enforce rules and keep IDs intact. Output in Vietnamese."}, {"role": "user", "content": prompt}],
             model="llama-3.3-70b-versatile", temperature=0.1, response_format={"type": "json_object"}
         )
         return json.loads(res.choices[0].message.content).get("data", [])
@@ -208,42 +225,64 @@ def generate_html_report(news_data, outlook):
     return html + "</body></html>"
 
 # ==========================================
-# 5. LUỒNG CHẠY CHÍNH (NÉN & LỌC DỮ LIỆU)
+# 5. LUỒNG CHẠY CHÍNH (URL MASKING)
 # ==========================================
 st.title("🌍 Radar Chiến Lược Toàn Cầu")
 
 if st.sidebar.button("🚀 CẬP NHẬT DỮ LIỆU", type="primary", use_container_width=True):
     if not current_groq_key or not current_gemini_key: st.error("Chưa có API Key!")
     else:
-        with st.spinner("Đang cào dữ liệu, lọc bỏ HTML rác và phân tích..."):
+        with st.spinner("Đang cào dữ liệu, nén Token và phân tích..."):
             st.session_state.news_store = {}; st.session_state.chat_history = []
             
             for r in regs:
                 raw_news = []
                 seen_links = set()
                 
+                # Quét tin từ kho
                 for url in RSS_FEEDS.get(r, []):
                     try:
                         f = feedparser.parse(url)
-                        for e in f.entries[:8]: # Lấy 8 tin mỗi đầu báo
+                        src_name = get_source_name(url)
+                        for e in f.entries[:8]: 
                             title = e.get('title','')
                             link = e.get('link','#')
-                            summary_html = e.get('summary','')
-                            
-                            # TUỐT RÁC HTML ĐỂ TIẾT KIỆM TOKEN CHO GROQ
-                            clean_summary = re.sub('<[^<]+>', '', summary_html).strip()[:180] 
+                            clean_summary = re.sub('<[^<]+>', '', e.get('summary','')).strip()[:100] # Nén tóm tắt xuống 100 chữ
                             
                             if link not in seen_links and title:
                                 seen_links.add(link)
-                                raw_news.append({"tit": title, "lnk": link, "sum": clean_summary})
+                                raw_news.append({"src": src_name, "tit": title, "lnk": link, "sum": clean_summary})
                     except: pass
                 
-                # TRỘN NGẪU NHIÊN VÀ CẮT LẤY TỐI ĐA 60 TIN (Chống vượt giới hạn 12.000 Token/phút)
                 random.shuffle(raw_news)
-                capped_raw_news = raw_news[:60]
+                # Lấy ngẫu nhiên 35-40 tin (Vừa đủ chọn lọc 25 tin, vừa không lố Token)
+                capped_raw_news = raw_news[:40]
                 
-                st.session_state.news_store[r] = groq_analyze(current_groq_key, capped_raw_news, r, topi, top_n_option)
-                time.sleep(3) # Nghỉ 3s để bảo vệ máy chủ Groq
+                # KỸ THUẬT MASKING: Tạo bộ từ điển chứa Link, chỉ đưa ID cho AI
+                ai_input = []
+                url_map = {}
+                for idx, item in enumerate(capped_raw_news):
+                    str_id = str(idx)
+                    url_map[str_id] = item['lnk'] # Giữ lại Link ở Python
+                    ai_input.append({
+                        "id": str_id,
+                        "src": item['src'],
+                        "tit": item['tit'],
+                        "sum": item['sum']
+                    }) # Chỉ gửi cục này đi
+                
+                # Gọi AI xử lý
+                analyzed_data = groq_analyze(current_groq_key, ai_input, r, topi, top_n_option)
+                
+                # UNMASK: Lắp lại Link vào dữ liệu sau khi AI trả về
+                for item in analyzed_data:
+                    if 'id' in item and str(item['id']) in url_map:
+                        item['lnk'] = url_map[str(item['id'])]
+                    else:
+                        item['lnk'] = "#"
+                
+                st.session_state.news_store[r] = analyzed_data
+                time.sleep(3) # Nghỉ 3s bảo vệ máy chủ
             
             try:
                 genai.configure(api_key=current_gemini_key)
